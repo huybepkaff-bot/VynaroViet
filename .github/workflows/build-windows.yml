@@ -1,0 +1,99 @@
+name: Build Vynaro Viet Windows
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'vynaro-viet-1.0.1-source.zip'
+      - '.github/workflows/build-windows.yml'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Setup Rust stable MSVC
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Unpack source
+        shell: powershell
+        run: |
+          if (!(Test-Path "vynaro-viet-1.0.1-source.zip")) {
+            Write-Error "Khong tim thay vynaro-viet-1.0.1-source.zip"
+            exit 1
+          }
+          New-Item -ItemType Directory -Force -Path app | Out-Null
+          Expand-Archive -Path "vynaro-viet-1.0.1-source.zip" -DestinationPath app -Force
+          $pkg = Get-ChildItem -Path app -Filter package.json -Recurse |
+            Where-Object { $_.FullName -notmatch '\\docs\\' } |
+            Select-Object -First 1
+          if (-not $pkg) {
+            Write-Error "Khong tim thay package.json cua ung dung"
+            exit 1
+          }
+          $root = Split-Path $pkg.FullName -Parent
+          "APP_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "APP_ROOT=$root"
+
+      - name: Install dependencies
+        shell: powershell
+        run: |
+          Set-Location $env:APP_ROOT
+          pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Thu lai voi --no-frozen-lockfile"
+            pnpm install --no-frozen-lockfile
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Build Windows EXE
+        shell: powershell
+        run: |
+          Set-Location $env:APP_ROOT
+          pnpm tauri build --bundles nsis
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Collect EXE
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path output | Out-Null
+          $bundle = Join-Path $env:APP_ROOT "src-tauri\target\release\bundle\nsis"
+          if (!(Test-Path $bundle)) {
+            Write-Error "Khong tim thay thu muc NSIS: $bundle"
+            exit 1
+          }
+          Get-ChildItem -Path $bundle -Filter *.exe -File | ForEach-Object {
+            Copy-Item $_.FullName -Destination output -Force
+          }
+          $files = Get-ChildItem output -Filter *.exe -File
+          if (-not $files) {
+            Write-Error "Khong tim thay file EXE sau khi build"
+            exit 1
+          }
+          $files | Format-Table Name,Length
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vynaro-Viet-Windows-EXE
+          path: output/*.exe
+          if-no-files-found: error
+          retention-days: 30
