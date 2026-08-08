@@ -40,6 +40,7 @@ jobs:
             Write-Error "Khong tim thay vynaro-viet-1.0.1-source.zip"
             exit 1
           }
+          if (Test-Path "app") { Remove-Item "app" -Recurse -Force }
           New-Item -ItemType Directory -Force -Path app | Out-Null
           Expand-Archive -Path "vynaro-viet-1.0.1-source.zip" -DestinationPath app -Force
           $pkg = Get-ChildItem -Path app -Filter package.json -Recurse |
@@ -75,20 +76,26 @@ jobs:
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path output | Out-Null
-          $bundle = Join-Path $env:APP_ROOT "src-tauri\target\release\bundle\nsis"
-          if (!(Test-Path $bundle)) {
-            Write-Error "Khong tim thay thu muc NSIS: $bundle"
-            exit 1
-          }
-          Get-ChildItem -Path $bundle -Filter *.exe -File | ForEach-Object {
-            Copy-Item $_.FullName -Destination output -Force
-          }
-          $files = Get-ChildItem output -Filter *.exe -File
+
+          Write-Host "Dang tim installer NSIS trong: $env:APP_ROOT"
+          $files = Get-ChildItem -Path $env:APP_ROOT -Recurse -File -Filter "*.exe" -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\target\\release\\bundle\\nsis\\' }
+
           if (-not $files) {
-            Write-Error "Khong tim thay file EXE sau khi build"
+            Write-Host "Khong thay trong bundle\\nsis. Liet ke cac EXE trong target\\release de debug:"
+            Get-ChildItem -Path $env:APP_ROOT -Recurse -File -Filter "*.exe" -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match '\\target\\release\\' } |
+              Select-Object FullName, Length |
+              Format-Table -AutoSize
+            Write-Error "Khong tim thay installer EXE NSIS sau khi build"
             exit 1
           }
-          $files | Format-Table Name,Length
+
+          foreach ($file in $files) {
+            Copy-Item $file.FullName -Destination output -Force
+          }
+
+          Get-ChildItem output -Filter "*.exe" -File | Format-Table Name, Length
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
